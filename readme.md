@@ -32,27 +32,27 @@ In addition to being lightweight in permissions, geekwatch does not require a pr
 *Upon initially inviting the bot, only server admins will have access to every command. Non-admins will be able to call commands only via DM until restrictions are lifted within a text channel.*
 
 -----
-`.gw follow [topic/board url or number]`
+`/follow [topic/board url or number]`
 
 Follow a topic for post notifications or a board for newly posted topics
 
-`.gw following`
+`/following`
 
 Returns your current follow list
 
-`.gw unfollow [index number]`
+`/unfollow [index number]`
 
-Unfollow a topic or board using an index provided by .gw following
+Unfollow a topic or board using an index provided by /following
 
-`.gw unfollow all`
+`/unfollow all`
 
 Unfollow all topics and boards
 
-`.gw help`
+`/help`
 
 Returns the commands list
 
-`.gw invite`
+`/invite`
 
 Returns an invite link for the bot
 
@@ -60,15 +60,15 @@ Returns an invite link for the bot
 
 **ADMIN ONLY**
 
-`.gw unrestrict`
+`/unrestrict`
 
 Lifts restrictions from a channel, allowing any user to call non-admin commands
 
-`.gw restrict`
+`/restrict`
 
 Restricts channel, disallowing non-admins to call any non-admin command (all channels are restricted by default)
 
-`.gw detach`
+`/detach`
 
 Removes all instances of channel from every list, including from other users (this can also be called via DM)
 
@@ -80,7 +80,7 @@ Removes all instances of channel from every list, including from other users (th
 
 > User wants to monitor the "Interest Checks" board within geekhack and would like post notifications in their direct messages
 
-User calls a command to geekwatch via DM: `.gw follow https://geekhack.org/index.php?board=132.0/`
+User calls a command to geekwatch via DM: `/follow https://geekhack.org/index.php?board=132.0/`
 
 - The user will now receive pings in their DMs whenever there is a new topic posted within "Interest Checks"
 
@@ -88,11 +88,11 @@ User calls a command to geekwatch via DM: `.gw follow https://geekhack.org/index
 
 > User no longer wants to monitor "Interest Checks"
 
-User calls to geekwatch via DM to return current follow list: `.gw following`
+User calls to geekwatch via DM to return current follow list: `/following`
 
 "Interest Checks" is listed with the index of 1
 
-User calls `.gw unfollow 1` to remove "Interest Checks" from follow list
+User calls `/unfollow 1` to remove "Interest Checks" from follow list
 
 
 - User will no longer receive notifications from the board
@@ -101,7 +101,7 @@ User calls `.gw unfollow 1` to remove "Interest Checks" from follow list
 
 > User (OP of a Groupbuy thread) wants to monitor their own topic/thread so that their new replies within the thread is redirected to a text channel in user's community Discord server
 
-User calls `.gw follow 105468` within a text channel
+User calls `/follow 105468` within a text channel
 
 - Any user with read access to the channel will now get pings when OP posts a new reply
 
@@ -109,7 +109,7 @@ User calls `.gw follow 105468` within a text channel
 
 > User (admin) wants to unrestrict a channel so that their friends can post similar topics as they share similar interests
 
-User creates a seperate text channel and calls `.gw unrestrict`
+User creates a seperate text channel and calls `/unrestrict`
 
 User agrees to the disclaimer by sending `unrestrict`
 
@@ -117,11 +117,11 @@ User agrees to the disclaimer by sending `unrestrict`
 
 ------
 
-> User (admin) has unrestricted a channel, however there is excessive activity in the channel as too many other users have called `.gw follow` and `.gw watch`
+> User (admin) has unrestricted a channel, however there is excessive activity in the channel as too many other users have called `/follow` and `/watch`
 
 User wants to re-restrict the channel and remove all trackers
 
-User calls `.gw restrict` and follows with `.gw detach`
+User calls `/restrict` and follows with `/detach`
 
 User agrees to the disclaimer by sending `detach`
 
