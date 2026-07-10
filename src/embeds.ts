@@ -99,10 +99,10 @@ export function removedEmbed(
 
   if (type === 'topic_all' || type === 'board_all' || type === 'mixed') {
     if (type === 'topic_all') {
-      embed.setDescription('Send `.gw follow ` along with a valid topic/board number or url')
+      embed.setDescription('Use `/follow` with a valid topic/board number or url')
         .setAuthor({ name: 'You are no longer following any topics', iconURL: avatar });
     } else if (type === 'board_all') {
-      embed.setDescription('Send `.gw follow url/board` to watch a board')
+      embed.setDescription('Use `/follow` with a board url or number to watch a board')
         .setAuthor({ name: 'You are no longer watching any boards', iconURL: avatar });
     }
     return embed;
@@ -133,8 +133,8 @@ export function watchlistEmbed(topics: string, boards: string, avatar: string): 
 
   if (noTopics && noBoards) {
     embed
-      .addFields({ name: 'Want to get started?', value: 'Send `.gw follow ` along with a valid topic/board number or url', inline: false })
-      .addFields({ name: 'Need help?', value: 'Send `.gw help` for a full list of commands', inline: false });
+      .addFields({ name: 'Want to get started?', value: 'Use `/follow` with a valid topic/board number or url', inline: false })
+      .addFields({ name: 'Need help?', value: 'Use `/help` for a full list of commands', inline: false });
   }
 
   return embed;
@@ -156,9 +156,9 @@ export function maxErrorEmbed(
     });
 
   if (type === 'topic') {
-    embed.setDescription(list + '\n\nSend `.gw unfollow #` to remove a topic from your list or `.gw unfollow all` to clear');
+    embed.setDescription(list + '\n\nUse `/unfollow` with an index number to remove a topic from your list or `/unfollow all` to clear');
   } else {
-    embed.setDescription(list + '\n\nSend `.gw unfollow #` to remove a board from your list or `.gw unfollow all` to clear');
+    embed.setDescription(list + '\n\nUse `/unfollow` with an index number to remove a board from your list or `/unfollow all` to clear');
   }
 
   return embed;
@@ -233,16 +233,16 @@ export function commandListEmbed(): EmbedBuilder {
     .setTitle('All Commands')
     .setColor(GOLD)
     .setDescription(
-      '```.gw follow url/topic/board```\nFollow a topic for post notifications or a board for newly posted topics\n\n' +
-      '```.gw following```\nReturns your current follow list\n\n' +
-      '```.gw unfollow #```\nUnfollow a topic or board using an index provided by .gw following\n\n' +
-      '```.gw unfollow all```\nUnfollow all topics and boards\n\n' +
-      '```.gw help```\nReturns the commands list\n\n' +
-      '```.gw invite```\nReturns an invite link for the bot\n\n' +
+      '```/follow url/topic/board```\nFollow a topic for post notifications or a board for newly posted topics\n\n' +
+      '```/following```\nReturns your current follow list\n\n' +
+      '```/unfollow #```\nUnfollow a topic or board using an index provided by /following\n\n' +
+      '```/unfollow all```\nUnfollow all topics and boards\n\n' +
+      '```/help```\nReturns the commands list\n\n' +
+      '```/invite```\nReturns an invite link for the bot\n\n' +
       '__**ADMIN ONLY**__\n\n' +
-      '```.gw unrestrict```\nLifts restrictions within a channel, allowing any user to call non-admin commands\n\n' +
-      '```.gw restrict```\nRestricts channel, disallowing non-admins to call any command (all channels are restricted by default)\n\n' +
-      '```.gw detach```\nRemoves all instances of channel from every list, including from other users (this can also be called via DM)'
+      '```/unrestrict```\nLifts restrictions within a channel, allowing any user to call non-admin commands\n\n' +
+      '```/restrict```\nRestricts channel, disallowing non-admins to call any command (all channels are restricted by default)\n\n' +
+      '```/detach```\nRemoves all instances of channel from every list, including from other users (this can also be called via DM)'
     );
 }
 

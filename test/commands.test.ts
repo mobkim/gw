@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { follow, follows, unfollow, serve, getCollections, unrestrict } from '../src/database.js';
-import { handleCommand } from '../src/commands/gw.js';
+import { follow, serve, getCollections, unrestrict } from '../src/database.js';
+import { handleSlashCommand } from '../src/commands/gw.js';
 
 // Mock embeds module
 vi.mock('../src/embeds.js', () => ({
@@ -28,97 +28,78 @@ vi.mock('../src/scraper.js', () => ({
 }));
 
 import { verify } from '../src/scraper.js';
-import * as embeds from '../src/embeds.js';
 
-const mockMessages = new Map<string, { content: string; embeds: unknown[] }>();
-
-function createMockMessage(
-  content: string,
+function createMockInteraction(
+  commandName: string,
   options: {
-    authorId?: string;
-    authorName?: string;
+    userId?: string;
     avatarURL?: string;
     isDM?: boolean;
     isAdmin?: boolean;
     guildId?: string;
     channelId?: string;
     guildChannels?: string[];
+    stringOptions?: Record<string, string>;
   } = {}
 ) {
   const {
-    authorId = 'user1',
-    authorName = 'TestUser',
+    userId = 'user1',
     avatarURL = 'https://example.com/avatar.png',
     isDM = false,
     isAdmin = false,
     guildId = 'guild1',
     channelId = isDM ? 'dm1' : 'channel1',
     guildChannels = [],
+    stringOptions = {},
   } = options;
 
   return {
-    content,
-    author: {
-      id: authorId,
-      username: authorName,
+    commandName,
+    user: {
+      id: userId,
       displayAvatarURL: () => avatarURL,
-      dmChannel: null as unknown,
-      send: vi.fn().mockResolvedValue({}),
     },
-    channel: {
-      id: channelId,
-      type: isDM ? 1 : 0,
-      send: vi.fn().mockResolvedValue({}),
-      guild: isDM
-        ? null
-        : {
-            id: guildId,
-            channels: {
-              cache: {
-                filter: vi.fn().mockReturnValue({
-                  map: vi.fn().mockReturnValue(guildChannels),
-                }),
-              },
-            },
-          },
-    },
-    member: {
-      permissions: {
-        has: vi.fn().mockReturnValue(isAdmin),
-      },
-    },
+    channelId,
     guild: isDM
       ? null
       : {
           id: guildId,
+          channels: {
+            cache: {
+              filter: vi.fn().mockReturnValue({
+                map: vi.fn().mockReturnValue(guildChannels),
+              }),
+            },
+          },
         },
-    delete: vi.fn().mockResolvedValue({}),
-    send: vi.fn().mockResolvedValue({}),
-  } as unknown as import('discord.js').Message;
+    member: isDM
+      ? null
+      : {
+          permissions: {
+            has: vi.fn().mockReturnValue(isAdmin),
+          },
+        },
+    client: {
+      channels: {
+        cache: {
+          get: vi.fn().mockReturnValue(undefined),
+        },
+      },
+    },
+    options: {
+      getString: vi.fn((name: string) => stringOptions[name] ?? null),
+    },
+    reply: vi.fn().mockResolvedValue({}),
+    followUp: vi.fn().mockResolvedValue({}),
+    replied: false,
+    deferred: false,
+  } as unknown as import('discord.js').ChatInputCommandInteraction;
 }
 
-function getSentEmbeds(message: any): unknown[] {
-  const sentCalls = message.author.send.mock.calls;
-  if (sentCalls.length > 0) {
-    return sentCalls[0][0].embeds;
-  }
-  const chanCalls = message.channel.send?.mock.calls;
-  if (chanCalls && chanCalls.length > 0) {
-    return chanCalls[0][0].embeds;
-  }
-  return [];
-}
-
-function getLastSentEmbed(message: any): unknown {
-  const sentCalls = message.author.send.mock.calls;
-  if (sentCalls.length > 0) {
-    return sentCalls[sentCalls.length - 1][0].embeds[0];
-  }
-  const chanCalls = message.channel.send?.mock.calls;
-  if (chanCalls && chanCalls.length > 0) {
-    return chanCalls[chanCalls.length - 1][0].embeds[0];
-  }
-  return null;
+function getLastRepliedEmbed(interaction: any): any {
+  const calls = interaction.reply.mock.calls;
+  if (calls.length === 0) return null;
+  return calls[calls.length - 1][0].embeds[0];
 }
 
 async function clearCollections() {
@@ -129,79 +110,71 @@ async function clearCollections() {
   await serving.deleteMany({});
 }
 
-describe('commands', () => {
+const TOPIC_RESPONSE: [string, number, string, string, number, string, string, string, string] = [
+  'My Topic',
+  12345,
+  '2024-01-01',
+  'OPUser',
+  1,
+  '',
+  'https://example.com/icon.png',
+  '100',
+  'https://example.com/image.png',
+];
+
+describe('slash commands', () => {
   beforeEach(async () => {
     await clearCollections();
     vi.clearAllMocks();
   });
 
-  function checkEmbedType(message: any, expectedType: string): boolean {
-    const embed = getLastSentEmbed(message);
-    return embed && (embed as any).type === expectedType;
-  }
-
-  function checkEmbedTitle(message: any, expectedTitle: string): boolean {
-    const embed = getLastSentEmbed(message);
-    return embed && (embed as any).title === expectedTitle;
-  }
-
-  describe('unknown command', () => {
-    it('sends error embed via DM', async () => {
-      const message = createMockMessage('.gw foobar', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
-      expect(checkEmbedType(message, 'error')).toBe(true);
-      const embed = getLastSentEmbed(message) as any;
-      expect(embed.title).toBe('Unrecognized command');
-    });
-  });
-
   describe('missing parameter', () => {
-    it('sends error embed for follow without parameter', async () => {
-      const message = createMockMessage('.gw follow', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
-      expect(checkEmbedType(message, 'error')).toBe(true);
+    it('sends error embed for follow without target', async () => {
+      const interaction = createMockInteraction('follow', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
+      expect(embed.title).toBe('Missing parameter');
     });
 
-    it('sends error embed for unfollow without parameter', async () => {
-      const message = createMockMessage('.gw unfollow', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
-      expect(checkEmbedType(message, 'error')).toBe(true);
+    it('sends error embed for unfollow without index', async () => {
+      const interaction = createMockInteraction('unfollow', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
+      expect(embed.title).toBe('Missing parameter');
     });
   });
 
   describe('follow topic (DM)', () => {
-    it('calls verify, follow, and sends messageEmbed', async () => {
-      vi.mocked(verify).mockResolvedValue([
-        'My Topic',
-        12345,
-        '2024-01-01',
-        'OPUser',
-        1,
-        '',
-        'https://example.com/icon.png',
-        '100',
-        'https://example.com/image.png',
-      ]);
+    it('calls verify, follow, and replies with messageEmbed', async () => {
+      vi.mocked(verify).mockResolvedValue(TOPIC_RESPONSE);
 
-      const message = createMockMessage('.gw follow 12345', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('follow', {
+        isDM: true,
+        stringOptions: { target: '12345' },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
       expect(verify).toHaveBeenCalledWith('12345');
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('message');
       expect(embed.title).toBe('Now following');
     });
   });
 
   describe('follow board (DM)', () => {
-    it('calls verify, follow, and sends messageEmbed', async () => {
+    it('calls verify, follow, and replies with messageEmbed', async () => {
       vi.mocked(verify).mockResolvedValue(['My Board', 5]);
 
-      const message = createMockMessage('.gw follow 5', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('follow', {
+        isDM: true,
+        stringOptions: { target: '5' },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
       expect(verify).toHaveBeenCalledWith('5');
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('message');
       expect(embed.title).toBe('Now watching');
     });
@@ -209,27 +182,15 @@ describe('commands', () => {
 
   describe('follow topic (channel, admin)', () => {
     it('works when user is admin', async () => {
-      vi.mocked(verify).mockResolvedValue([
-        'My Topic',
-        12345,
-        '2024-01-01',
-        'OPUser',
-        1,
-        '',
-        'https://example.com/icon.png',
-        '100',
-        'https://example.com/image.png',
-      ]);
+      vi.mocked(verify).mockResolvedValue(TOPIC_RESPONSE);
 
-      const message = createMockMessage('.gw follow 12345', {
-        isDM: false,
+      const interaction = createMockInteraction('follow', {
         isAdmin: true,
-        channelId: 'channel1',
-        guildId: 'guild1',
+        stringOptions: { target: '12345' },
       });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('message');
       expect(embed.title).toBe('Now following');
     });
@@ -237,56 +198,60 @@ describe('commands', () => {
 
   describe('follow topic (channel, non-admin, restricted)', () => {
     it('returns permission error', async () => {
-      const message = createMockMessage('.gw follow 12345', {
-        isDM: false,
+      const interaction = createMockInteraction('follow', {
         isAdmin: false,
-        channelId: 'channel1',
-        guildId: 'guild1',
+        stringOptions: { target: '12345' },
       });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      expect(checkEmbedType(message, 'error')).toBe(true);
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
       expect(embed.title).toBe('No permission');
     });
   });
 
   describe('follow topic (channel, non-admin, unrestricted)', () => {
     it('works when channel is unrestricted', async () => {
-      vi.mocked(verify).mockResolvedValue([
-        'My Topic',
-        12345,
-        '2024-01-01',
-        'OPUser',
-        1,
-        '',
-        'https://example.com/icon.png',
-        '100',
-        'https://example.com/image.png',
-      ]);
+      vi.mocked(verify).mockResolvedValue(TOPIC_RESPONSE);
       await serve('Test Server', 'guild1');
       await unrestrict('guild1', 'channel1');
 
-      const message = createMockMessage('.gw follow 12345', {
-        isDM: false,
+      const interaction = createMockInteraction('follow', {
         isAdmin: false,
-        channelId: 'channel1',
-        guildId: 'guild1',
+        stringOptions: { target: '12345' },
       });
-      await handleCommand(message, vi.fn().mockResolvedValue(true));
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(true));
 
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('message');
       expect(embed.title).toBe('Now following');
     });
   });
 
-  describe('following (empty)', () => {
-    it('returns followListEmbed with "None"', async () => {
-      const message = createMockMessage('.gw following', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+  describe('follow duplicate within server', () => {
+    it('returns error when topic already followed in a guild channel', async () => {
+      vi.mocked(verify).mockResolvedValue(TOPIC_RESPONSE);
+      await follow('user2', 'My Topic', 12345, 'channel1', ['My Topic', 12345]);
 
-      const embed = getLastSentEmbed(message) as any;
+      const interaction = createMockInteraction('follow', {
+        isAdmin: true,
+        guildChannels: ['channel1'],
+        stringOptions: { target: '12345' },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
+      expect(embed.title).toBe('Already followed within this server');
+    });
+  });
+
+  describe('following (empty)', () => {
+    it('replies with followListEmbed containing "None"', async () => {
+      const interaction = createMockInteraction('following', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('followList');
       expect(embed.topics).toBe('None');
       expect(embed.boards).toBe('None');
@@ -294,14 +259,14 @@ describe('commands', () => {
   });
 
   describe('following (with items)', () => {
-    it('returns followListEmbed with topics and boards', async () => {
+    it('replies with followListEmbed containing topics and boards', async () => {
       await follow('user1', 'My Topic', 12345, 'user1', ['My Topic', 12345]);
       await follow('user1', 'My Board', 5, 'user1', ['My Board', 5]);
 
-      const message = createMockMessage('.gw following', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('following', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('followList');
       expect(embed.topics).toContain('My Topic');
       expect(embed.boards).toContain('My Board');
@@ -309,91 +274,140 @@ describe('commands', () => {
   });
 
   describe('unfollow by index', () => {
-    it('calls unfollow and sends removedEmbed', async () => {
+    it('calls unfollow and replies with removedEmbed', async () => {
       await follow('user1', 'My Topic', 12345, 'user1', ['My Topic', 12345]);
 
-      const message = createMockMessage('.gw unfollow 1', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('unfollow', {
+        isDM: true,
+        stringOptions: { index: '1' },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('removed');
       expect(embed.name).toBe('My Topic');
+    });
+
+    it('replies with bad-index error for out-of-range index', async () => {
+      const interaction = createMockInteraction('unfollow', {
+        isDM: true,
+        stringOptions: { index: '7' },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
+      expect(embed.title).toBe('Bad index!');
     });
   });
 
   describe('unfollow all', () => {
-    it('calls unfollow with "all"', async () => {
+    it('clears the list and replies with followListEmbed', async () => {
       await follow('user1', 'My Topic', 12345, 'user1', ['My Topic', 12345]);
 
-      const message = createMockMessage('.gw unfollow all', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('unfollow', {
+        isDM: true,
+        stringOptions: { index: 'all' },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('followList');
     });
   });
 
   describe('help command', () => {
-    it('sends commandListEmbed', async () => {
-      const message = createMockMessage('.gw help', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+    it('replies with commandListEmbed', async () => {
+      const interaction = createMockInteraction('help', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      const embed = getLastSentEmbed(message) as any;
-      expect(embed.type).toBe('commandList');
-    });
-
-    it('commands subcommand also sends help', async () => {
-      const message = createMockMessage('.gw commands', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
-
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('commandList');
     });
   });
 
   describe('invite command', () => {
-    it('sends inviteEmbed', async () => {
-      const message = createMockMessage('.gw invite', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+    it('replies with inviteEmbed', async () => {
+      const interaction = createMockInteraction('invite', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('invite');
     });
   });
 
   describe('unrestrict', () => {
     it('returns error in DM (must be in channel)', async () => {
-      const message = createMockMessage('.gw unrestrict', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('unrestrict', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      expect(checkEmbedType(message, 'error')).toBe(true);
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
+      expect(embed.title).toBe('Invalid channel');
     });
 
     it('returns admin-only error for non-admin', async () => {
-      const message = createMockMessage('.gw unrestrict', {
-        isDM: false,
-        isAdmin: false,
-        channelId: 'channel1',
-        guildId: 'guild1',
-      });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('unrestrict', { isAdmin: false });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      expect(checkEmbedType(message, 'error')).toBe(true);
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
+      expect(embed.title).toBe('Admin only');
     });
 
-    it('stores state and sends WARNING for admin', async () => {
+    it('stores state and replies WARNING with confirm buttons for admin', async () => {
       await serve('Test Server', 'guild1');
-      const message = createMockMessage('.gw unrestrict', {
-        isDM: false,
-        isAdmin: true,
-        channelId: 'channel1',
-        guildId: 'guild1',
-      });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('unrestrict', { isAdmin: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('gatekeep');
       expect(embed.msg).toBe('WARNING');
+      const replyArg = (interaction.reply as any).mock.calls[0][0];
+      expect(replyArg.components[0].type).toBe('confirmRow');
+    });
+  });
+
+  describe('restrict', () => {
+    it('returns error in DM (must be in channel)', async () => {
+      const interaction = createMockInteraction('restrict', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
+      expect(embed.title).toBe('Invalid channel');
+    });
+
+    it('restricts an unrestricted channel for admin', async () => {
+      await serve('Test Server', 'guild1');
+      await unrestrict('guild1', 'channel1');
+
+      const interaction = createMockInteraction('restrict', { isAdmin: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('gatekeep');
+      expect(embed.msg).toBe('Channel has been restricted');
+    });
+  });
+
+  describe('detach', () => {
+    it('allows anyone to detach in DM', async () => {
+      const interaction = createMockInteraction('detach', { isDM: true });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('gatekeep');
+      expect(embed.msg).toBe('dm');
+    });
+
+    it('returns admin-only error for non-admin in channel', async () => {
+      const interaction = createMockInteraction('detach', { isAdmin: false });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
+
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
+      expect(embed.title).toBe('Admin only');
     });
   });
 
@@ -401,22 +415,28 @@ describe('commands', () => {
     it('returns 404 embed when verify returns 404', async () => {
       vi.mocked(verify).mockResolvedValue(404);
 
-      const message = createMockMessage('.gw follow 99999', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('follow', {
+        isDM: true,
+        stringOptions: { target: '99999' },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      expect(checkEmbedType(message, 'error')).toBe(true);
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
       expect(embed.title).toBe('Could not locate topic or board');
     });
 
     it('returns 503 embed when verify returns 503', async () => {
       vi.mocked(verify).mockResolvedValue(503);
 
-      const message = createMockMessage('.gw follow 12345', { isDM: true });
-      await handleCommand(message, vi.fn().mockResolvedValue(false));
+      const interaction = createMockInteraction('follow', {
+        isDM: true,
+        stringOptions: { target: '12345' },
+      });
+      await handleSlashCommand(interaction, vi.fn().mockResolvedValue(false));
 
-      expect(checkEmbedType(message, 'error')).toBe(true);
-      const embed = getLastSentEmbed(message) as any;
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
       expect(embed.title).toBe('Connection error');
     });
   });

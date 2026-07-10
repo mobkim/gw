@@ -1,6 +1,6 @@
-import { Client, IntentsBitField, Partials, Events, REST, Routes, ApplicationCommand } from 'discord.js';
+import { Client, IntentsBitField, Events, REST, Routes, ApplicationCommand } from 'discord.js';
 import { connectDB, unrestricts, unrestrict, clean, migrateWatchingLast } from './database.js';
-import { handleCommand, handleSlashCommand, commands, unrestrictStates, detachStates } from './commands/gw.js';
+import { handleSlashCommand, commands, unrestrictStates, detachStates } from './commands/gw.js';
 import { startWatcher } from './watcher.js';
 import { startListener } from './listener.js';
 import { serve, unserve } from './database.js';
@@ -8,10 +8,11 @@ import { log } from './logger.js';
 import { DISCORD_TOKEN, CLIENT_ID } from './config.js';
 import { gatekeepEmbed } from './embeds.js';
 
-const intents = [IntentsBitField.Flags.Guilds, IntentsBitField.Flags.GuildMessages, IntentsBitField.Flags.DirectMessages, IntentsBitField.Flags.MessageContent];
+// Slash commands and buttons arrive via InteractionCreate, which needs no
+// privileged intents; Guilds covers the guild/channel cache and join/leave events
+const intents = [IntentsBitField.Flags.Guilds];
 
-// Partials.Channel is required to receive MessageCreate events for DMs
-const client = new Client({ intents, partials: [Partials.Channel] });
+const client = new Client({ intents });
 
 client.on(Events.ClientReady, async () => {
   await connectDB();
@@ -40,14 +41,6 @@ client.on(Events.ClientReady, async () => {
 
   startWatcher(client);
   startListener(client);
-});
-
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return;
-  const checkFn = async (guildId: string, channelId: string): Promise<boolean> => {
-    return unrestricts(guildId, channelId);
-  };
-  await handleCommand(message, checkFn);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {

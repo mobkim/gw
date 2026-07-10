@@ -11,8 +11,6 @@ export const GEEKHACK_BASE = 'https://geekhack.org';
 export const MAX_FOLLOWS = 10;
 export const MAX_WATCHES = 10;
 
-export const COMMAND_PREFIX = '.gw';
-
 export const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.87 Safari/537.36';
 
@@ -28,4 +26,4 @@ export const DEFAULT_IMAGE =
 export const FOOTER_ICON = 'https://i.imgur.com/JEDbZSQ.png';
 
 export const INVITE_URL =
-  'https://discord.com/oauth2/authorize?client_id=772690211792224256&permissions=10240&scope=bot';
+  'https://discord.com/oauth2/authorize?client_id=772690211792224256&permissions=10240&scope=bot%20applications.commands';
