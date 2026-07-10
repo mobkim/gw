@@ -92,6 +92,41 @@ describe('database', () => {
       const doc = await follows('user1');
       expect(doc.following.topics.length).toBe(0);
     });
+
+    it('follow creates docs with numeric _ids matching the legacy int scheme', async () => {
+      await follow('111', 'Topic', 12345, '111', ['Topic', 12345]);
+      await follow('222', 'Topic', 12345, '222', ['Topic', 12345]);
+
+      const { following } = getCollections();
+      const docs = await following.find({}).toArray();
+      expect(docs.length).toBe(2);
+      for (const doc of docs) {
+        expect(typeof doc._id).toBe('number');
+      }
+      expect(await idIter(following)).toBe(Math.max(...docs.map(d => d._id as number)) + 1);
+    });
+
+    it('unfollow removes only the selected entry when a topic is followed in channel and DM', async () => {
+      // Same user, same topic, two addresses: channel entry then DM entry
+      await follow('111', 'Dual Topic', 12345, '555', ['Dual Topic', 12345]);
+      await follow('111', 'Dual Topic', 12345, '111', ['Dual Topic', 12345]);
+      let doc = await follows('111');
+      expect(doc.following.topics.length).toBe(2);
+
+      // Index 1 is the channel entry
+      const removed = await unfollow('111', '1');
+      expect(removed).toEqual(['Dual Topic', 12345]);
+
+      doc = await follows('111');
+      expect(doc.following.topics.length).toBe(1);
+      expect(String(doc.following.topics[0].address)).toBe('111');
+
+      // The DM subscription must still be live; the channel one gone
+      const { listening } = getCollections();
+      const ldoc = await listening.findOne({ topic_id: 12345 });
+      expect((ldoc!.to.dm ?? []).map(String)).toContain('111');
+      expect((ldoc!.to.channel ?? []).map(String)).not.toContain('555');
+    });
   });
 
   describe('follow / unfollow (boards)', () => {

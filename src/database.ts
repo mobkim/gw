@@ -84,12 +84,16 @@ export async function follow(
   const method = sameAddress(user_id, address) ? 'dm' : 'channel';
   const ul = toLong(user_id);
 
+  // Ensure the doc exists with a numeric _id from idIter — an upsert here
+  // would create it with an ObjectId _id, which sorts above all numbers and
+  // breaks idIter for every subsequent insert
+  await follows(user_id);
+
   if (isTopic) {
      if (await listen(response as [string, number], address, method)) {
        await following.updateOne(
          { user_id: ul },
-         { $addToSet: { 'following.topics': { topic: target, topic_id: target_id, address } } },
-         { upsert: true }
+         { $addToSet: { 'following.topics': { topic: target, topic_id: target_id, address } } }
        );
        return true;
      }
@@ -98,8 +102,7 @@ export async function follow(
      if (await watch(response as [string, number], address, method)) {
        await following.updateOne(
          { user_id: ul },
-         { $addToSet: { 'following.boards': { board: target, board_id: target_id, address } } },
-         { upsert: true }
+         { $addToSet: { 'following.boards': { board: target, board_id: target_id, address } } }
        );
        return true;
      }
@@ -155,6 +158,8 @@ export async function unfollow(
   const topics = doc.following.topics || [];
   const boards = doc.following.boards || [];
 
+  // Pull by id AND address — the same topic/board can appear twice for one
+  // user (channel + DM entries), and only the selected entry may be removed
   if (index >= topics.length) {
     index -= topics.length;
     const match = boards[index];
@@ -162,7 +167,7 @@ export async function unfollow(
     await unwatch(match.board_id, user_id, match.address);
     await following.updateOne(
       { user_id: toLong(user_id) },
-      { $pull: { 'following.boards': { board_id: match.board_id } } }
+      { $pull: { 'following.boards': { board_id: match.board_id, address: { $in: addressVariants(match.address) } } } } as any
     );
     return [match.board, match.board_id] as [string, number];
   } else {
@@ -171,7 +176,7 @@ export async function unfollow(
     await unlisten(match.topic_id, user_id, match.address);
     await following.updateOne(
       { user_id: toLong(user_id) },
-      { $pull: { 'following.topics': { topic_id: match.topic_id } } }
+      { $pull: { 'following.topics': { topic_id: match.topic_id, address: { $in: addressVariants(match.address) } } } } as any
     );
     return [match.topic, match.topic_id] as [string, number];
   }
