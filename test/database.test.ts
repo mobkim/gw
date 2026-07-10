@@ -23,7 +23,7 @@ import {
    clean,
    getCollections,
 } from '../src/database.js';
-import { Collection } from 'mongodb';
+import { Collection, Long } from 'mongodb';
 
 async function clearCollections() {
   const { following, listening, watching, serving } = getCollections();
@@ -350,6 +350,33 @@ describe('database', () => {
       await serve('Test Server', 'server1');
       const result = await restrict('server1', 'channel1');
       expect(result).toBe(false);
+    });
+
+    it('unrestrict works when the serving doc is missing (guild joined while offline)', async () => {
+      const result = await unrestrict('888001', '888002');
+      expect(result).toBe(true);
+      expect(await unrestricts('888001', '888002')).toBe(true);
+      expect(await unrestricts('888001', '888003')).toBe(false);
+    });
+
+    it('unrestrict works on a legacy doc without the unrestricting field', async () => {
+      const { serving } = getCollections();
+      await serving.insertOne({
+        _id: 999,
+        server: 'Legacy Server',
+        server_id: Long.fromString('700'),
+        serving: true,
+      } as any);
+
+      const result = await unrestrict('700', '701');
+      expect(result).toBe(true);
+      expect(await unrestricts('700', '701')).toBe(true);
+    });
+
+    it('unrestricts defaults to restricted for unknown servers and channels', async () => {
+      expect(await unrestricts('nope', 'nope')).toBe(false);
+      await serve('Test Server', 'server1');
+      expect(await unrestricts('server1', 'channel1')).toBe(false);
     });
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { follow, serve, getCollections, unrestrict } from '../src/database.js';
+import { follow, serve, getCollections, unrestrict, unrestricts, restrict } from '../src/database.js';
 import { handleSlashCommand } from '../src/commands/gw.js';
 
 // Mock embeds module
@@ -40,6 +40,7 @@ function createMockInteraction(
     channelId?: string;
     guildChannels?: string[];
     stringOptions?: Record<string, string>;
+    guildUncached?: boolean;
   } = {}
 ) {
   const {
@@ -51,6 +52,7 @@ function createMockInteraction(
     channelId = isDM ? 'dm1' : 'channel1',
     guildChannels = [],
     stringOptions = {},
+    guildUncached = false,
   } = options;
 
   return {
@@ -60,7 +62,8 @@ function createMockInteraction(
       displayAvatarURL: () => avatarURL,
     },
     channelId,
-    guild: isDM
+    guildId: isDM ? null : guildId,
+    guild: isDM || guildUncached
       ? null
       : {
           id: guildId,
@@ -207,6 +210,82 @@ describe('slash commands', () => {
       const embed = getLastRepliedEmbed(interaction);
       expect(embed.type).toBe('error');
       expect(embed.title).toBe('No permission');
+    });
+  });
+
+  describe('follow topic (channel, non-admin, guild not cached)', () => {
+    it('still denies when interaction.guild is null but guildId is set', async () => {
+      const interaction = createMockInteraction('follow', {
+        isAdmin: false,
+        guildUncached: true,
+        stringOptions: { target: '12345' },
+      });
+      const checkFn = vi.fn().mockResolvedValue(false);
+      await handleSlashCommand(interaction, checkFn);
+
+      expect(checkFn).toHaveBeenCalledWith('guild1', 'channel1');
+      const embed = getLastRepliedEmbed(interaction);
+      expect(embed.type).toBe('error');
+      expect(embed.title).toBe('No permission');
+    });
+  });
+
+  describe('restriction lifecycle (real database check)', () => {
+    // IDs must be numeric like real snowflakes — the DB layer converts them
+    // with Long.fromString, which mangles non-numeric strings
+    it('denies by default, allows after unrestrict, denies again after restrict', async () => {
+      vi.mocked(verify).mockResolvedValue(TOPIC_RESPONSE);
+      const checkFn = (gId: string, cId: string) => unrestricts(gId, cId);
+      await serve('Test Server', '800100');
+
+      // Default: restricted
+      let interaction = createMockInteraction('follow', {
+        isAdmin: false,
+        guildId: '800100',
+        channelId: '800101',
+        stringOptions: { target: '12345' },
+      });
+      await handleSlashCommand(interaction, checkFn);
+      expect(getLastRepliedEmbed(interaction).title).toBe('No permission');
+
+      // Admin unrestricts
+      await unrestrict('800100', '800101');
+      interaction = createMockInteraction('follow', {
+        isAdmin: false,
+        guildId: '800100',
+        channelId: '800101',
+        stringOptions: { target: '12345' },
+      });
+      await handleSlashCommand(interaction, checkFn);
+      expect(getLastRepliedEmbed(interaction).title).toBe('Now following');
+
+      // Admin restricts again
+      await restrict('800100', '800101');
+      interaction = createMockInteraction('follow', {
+        isAdmin: false,
+        userId: 'user2',
+        guildId: '800100',
+        channelId: '800101',
+        stringOptions: { target: '12345' },
+      });
+      await handleSlashCommand(interaction, checkFn);
+      expect(getLastRepliedEmbed(interaction).title).toBe('No permission');
+    });
+
+    it('a different channel in the same server stays restricted', async () => {
+      vi.mocked(verify).mockResolvedValue(TOPIC_RESPONSE);
+      const checkFn = (gId: string, cId: string) => unrestricts(gId, cId);
+      await serve('Test Server', '810100');
+      await unrestrict('810100', '810101');
+
+      const interaction = createMockInteraction('follow', {
+        isAdmin: false,
+        guildId: '810100',
+        channelId: '810102',
+        stringOptions: { target: '12345' },
+      });
+      await handleSlashCommand(interaction, checkFn);
+      expect(getLastRepliedEmbed(interaction).title).toBe('No permission');
     });
   });
 

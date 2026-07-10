@@ -126,8 +126,10 @@ export async function handleSlashCommand(
   const user_id = interaction.user.id;
   const avatar = interaction.user.displayAvatarURL();
   // DM follows are keyed by user id, not the DM channel id (matches the
-  // prefix-command path and the legacy DB)
-  const address = interaction.guild ? interaction.channelId : user_id;
+  // legacy DB). Guild detection uses guildId (always in the payload), not
+  // interaction.guild, which is null on a cache miss and would bypass the
+  // restriction check.
+  const address = interaction.guildId ? interaction.channelId : user_id;
   const member = interaction.member;
   let isAdmin = false;
   if (member && 'permissions' in member) {
@@ -202,7 +204,7 @@ async function handleFollowOrWatchSlash(
   checkUnrestricted: (guildId: string, channelId: string) => Promise<boolean>
 ): Promise<void> {
   // Restrictions only apply to server channels — DMs are always allowed
-  if (interaction.guild && !isAdmin && !(await checkUnrestricted(interaction.guild.id, address))) {
+  if (interaction.guildId && !isAdmin && !(await checkUnrestricted(interaction.guildId, address))) {
     await interaction.reply({ embeds: [errorEmbed('No permission', 'You do not have permissions to call this command')], ephemeral: true });
     return;
   }
@@ -310,7 +312,7 @@ async function handleUnrestrictSlash(
   user_id: string,
   checkUnrestricted: (guildId: string, channelId: string) => Promise<boolean>
 ): Promise<void> {
-  const guildId = interaction.guild?.id;
+  const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({ embeds: [errorEmbed('Invalid channel', 'This command is limited to text channels within servers')], ephemeral: true });
     return;
@@ -341,7 +343,7 @@ async function handleRestrictSlash(
   address: string,
   interaction: ChatInputCommandInteraction
 ): Promise<void> {
-  const guildId = interaction.guild?.id;
+  const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({ embeds: [errorEmbed('Invalid channel', 'This command is limited to text channels within servers')], ephemeral: true });
     return;
@@ -367,7 +369,7 @@ async function handleDetachSlash(
   user_id: string
 ): Promise<void> {
   // In DMs anyone may detach their own address; in servers admins only
-  const method = interaction.guild ? 'channel' : 'dm';
+  const method = interaction.guildId ? 'channel' : 'dm';
 
   if (method === 'channel' && !isAdmin) {
     await interaction.reply({ embeds: [errorEmbed('Admin only', 'This command is limited to admins only')], ephemeral: true });

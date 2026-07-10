@@ -383,15 +383,23 @@ export async function unrestricts(sid: string, cid: string): Promise<boolean> {
 
 export async function unrestrict(sid: string, cid: string): Promise<boolean> {
   const doc = await serving.findOne({ server_id: toLong(sid) });
-  const u = doc?.unrestricting;
   const channelId = toLong(cid);
-  if (u === false) {
-    await serving.updateOne(
-      { server_id: toLong(sid) },
-      { $set: { unrestricting: [channelId] } }
-    );
+
+  // No serving doc yet (guild joined while the bot was offline never gets a
+  // GuildCreate/serve call) — create one so the unrestrict still takes effect
+  if (!doc) {
+    const id = await idIter(serving);
+    await serving.insertOne({
+      _id: id,
+      server: '',
+      server_id: toLong(sid),
+      unrestricting: [channelId],
+      serving: true,
+    });
     return true;
   }
+
+  const u = doc.unrestricting;
   if (Array.isArray(u)) {
     if (u.some((v: any) => String(v) === String(channelId))) return false;
     await serving.updateOne(
@@ -400,7 +408,13 @@ export async function unrestrict(sid: string, cid: string): Promise<boolean> {
     );
     return true;
   }
-  return false;
+
+  // unrestricting is false, or missing on a legacy doc
+  await serving.updateOne(
+    { server_id: toLong(sid) },
+    { $set: { unrestricting: [channelId] } }
+  );
+  return true;
 }
 
 export async function restrict(sid: string, cid: string): Promise<boolean> {
