@@ -1,12 +1,19 @@
-import { Client, TextChannel, User } from 'discord.js';
+import { Client, TextChannel } from 'discord.js';
 import { listens, listened, clean } from './database.js';
 import { log } from './logger.js';
-import { GEEKHACK_BASE, FOOTER_ICON } from './config.js';
+import { GEEKHACK_BASE } from './config.js';
 import { topicPostEmbed } from './embeds.js';
+import { parseRecentTopics } from './scraper.js';
 
 import * as cheerio from 'cheerio';
 
 const HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.87 Safari/537.36' };
+
+/** Posts geekhack renders on one topic page. */
+const POSTS_PER_PAGE = 50;
+
+/** Ceiling on posts announced per topic per tick, so a burst can't flood a channel. */
+const MAX_POSTS_PER_TICK = 10;
 
 async function fetchPage(url: string): Promise<cheerio.CheerioAPI | null> {
   try {
@@ -20,122 +27,149 @@ async function fetchPage(url: string): Promise<cheerio.CheerioAPI | null> {
   }
 }
 
-async function processTopic(client: Client, topic_id: number, post: number, topic_title: string): Promise<void> {
-  const $ = await fetchPage(`${GEEKHACK_BASE}/index.php?topic=${topic_id}.${post}`);
-  if (!$) return;
+/**
+ * Build the embed for one post, or null if it isn't by the thread starter.
+ *
+ * `offset` is the post's index within the topic (0 = opening post, N = Reply #N).
+ */
+function buildPostEmbed(
+  $: cheerio.CheerioAPI,
+  postWrapper: cheerio.Cheerio<any>,
+  topic_id: number,
+  topic_title: string,
+  offset: number
+) {
+  const posterDiv = postWrapper.find('div.poster').first();
+  if (posterDiv.length === 0) return null;
 
-  // Determine page number for pagination
-  let page = 1;
+  const threadStarter = posterDiv.find('li.threadstarter');
+  if (threadStarter.length === 0) return null;
+
+  const innerDiv = postWrapper.find('div.inner').first();
+  if (innerDiv.length === 0) return null;
+
+  // Remove blockquotes from text
+  const tempInner = innerDiv.clone();
+  tempInner.find('blockquote').remove();
+  tempInner.find('div.topslice_quote').remove();
+  let response = tempInner.text().trim();
+  response = response.replace(/\n{3,}/g, '\n\n');
+
+  // Find replied-to users
+  const replyList: string[] = [];
+  innerDiv.find('div.topslice_quote').each((_, qEl) => {
+    const text = $(qEl).text();
+    const onIdx = text.indexOf('on');
+    if (onIdx > 12) {
+      replyList.push(text.slice(12, onIdx - 1));
+    }
+  });
+
+  const quoted = replyList.length > 0 ? replyList.join(' & ') : '';
+  const kind = quoted ? `Response to ${quoted}` : 'Direct Post';
+
+  let image = '';
   try {
-    const pagelinks = $('div.pagelinks.floatleft');
-    if (pagelinks.length > 0) {
-      const contents = pagelinks.contents();
-      const lastText = contents.last().text().trim();
-      page = parseInt(lastText, 10);
+    const highslide = postWrapper.find('a.highslide').first();
+    if (highslide.length > 0) {
+      image = highslide.attr('href') || '';
     }
   } catch {
-    page = 1;
+    image = '';
   }
 
-  let pi = 0;
-  if (page !== 1) {
-    pi = (page * 50) - 50;
+  let opIcon = '';
+  try {
+    const avatar = postWrapper.find('li.avatar img.avatar').first();
+    if (avatar.length > 0) {
+      opIcon = avatar.attr('src') || '';
+    }
+  } catch {
+    opIcon = '';
   }
 
-  const infoDivs = $('div.keyinfo');
-  const startIndex = post - pi;
+  const opScore = posterDiv.find('li.postcount').text().replace('Posts: ', '');
+  const opName = posterDiv.find('a').text().trim();
 
-  for (let i = startIndex; i < infoDivs.length; i++) {
-    const postWrapper = infoDivs.eq(i).closest('div.post_wrapper').length > 0
-      ? infoDivs.eq(i).closest('div.post_wrapper')
-      : infoDivs.eq(i).parent().closest('div.post_wrapper');
+  // The date line and the permalink live in div.keyinfo, not div.poster —
+  // scoping these to posterDiv matched nothing, so every embed carried an
+  // empty timestamp and fell back to a topic-level link.
+  const keyinfo = postWrapper.find('div.keyinfo').first();
 
-    if (postWrapper.length === 0) continue;
+  const smalltext = keyinfo.find('div.smalltext').text();
+  const cleanTime = smalltext.replace('« ', '').replace(' »', '');
+  const replyNumIdx = cleanTime.indexOf(' on: ');
+  const datePart = replyNumIdx !== -1 ? cleanTime.slice(replyNumIdx + 5) : cleanTime;
+  const replyNumPart = replyNumIdx !== -1 ? cleanTime.slice(0, replyNumIdx + 5).replace(' on: ', '').replace('Reply ', '') : '';
+  const timestamp = `${datePart} | ${replyNumPart}`;
 
-    const posterDiv = postWrapper.find('div.poster').first();
-    if (posterDiv.length === 0) continue;
-
-    const threadStarter = posterDiv.find('li.threadstarter');
-    if (threadStarter.length === 0) continue;
-
-    const innerDiv = postWrapper.find('div.inner').first();
-    if (innerDiv.length === 0) continue;
-
-    // Remove blockquotes from text
-    const tempInner = innerDiv.clone();
-    tempInner.find('blockquote').remove();
-    tempInner.find('div.topslice_quote').remove();
-    let response = tempInner.text().trim();
-    response = response.replace(/\n{3,}/g, '\n\n');
-
-    // Find replied-to users
-    const replyList: string[] = [];
-    innerDiv.find('div.topslice_quote').each((_, qEl) => {
-      const text = $(qEl).text();
-      const onIdx = text.indexOf('on');
-      if (onIdx > 12) {
-        replyList.push(text.slice(12, onIdx - 1));
+  let msgHref = '';
+  try {
+    const msgLink = keyinfo.find('h5 a').first();
+    if (msgLink.length > 0) {
+      const msg = msgLink.attr('href') || '';
+      const hashIdx = msg.indexOf('#');
+      if (hashIdx !== -1) {
+        const msgn = msg.slice(hashIdx + 1);
+        msgHref = `${GEEKHACK_BASE}/index.php?topic=${topic_id}.${msgn}#${msgn}`;
       }
-    });
-
-    const quoted = replyList.length > 0 ? replyList.join(' & ') : '';
-    const kind = quoted ? `Response to ${quoted}` : 'Direct Post';
-
-    let image = '';
-    try {
-      const highslide = postWrapper.find('a.highslide').first();
-      if (highslide.length > 0) {
-        image = highslide.attr('href') || '';
-      }
-    } catch {
-      image = '';
     }
+  } catch {
+    // ignore
+  }
 
-    let opIcon = '';
-    try {
-      const avatar = postWrapper.find('li.avatar img.avatar').first();
-      if (avatar.length > 0) {
-        opIcon = avatar.attr('src') || '';
-      }
-    } catch {
-      opIcon = '';
+  if (!msgHref) {
+    msgHref = `${GEEKHACK_BASE}/index.php?topic=${topic_id}.${offset}`;
+  }
+
+  return topicPostEmbed(kind, msgHref, response, topic_title, opName, opScore, opIcon, image, timestamp);
+}
+
+/**
+ * Announce the thread starter's posts at offsets `from..to` (inclusive).
+ *
+ * geekhack floors the `.N` start offset to a 50-post page boundary, so
+ * `topic=X.118` renders replies #100-#149 and the wanted post sits at index
+ * `118 % 50` on that page. Deriving the offset arithmetically avoids reading
+ * the page number out of `div.pagelinks`, whose last node is the "Go Down"
+ * link — `parseInt` returned NaN there, which poisoned the scan index and made
+ * the loop body never run.
+ */
+export async function processTopic(
+  client: Client,
+  topic_id: number,
+  from: number,
+  to: number,
+  topic_title: string
+): Promise<void> {
+  const embeds: ReturnType<typeof topicPostEmbed>[] = [];
+  const firstPage = Math.floor(from / POSTS_PER_PAGE) * POSTS_PER_PAGE;
+
+  for (let pageStart = firstPage; pageStart <= to; pageStart += POSTS_PER_PAGE) {
+    const $ = await fetchPage(`${GEEKHACK_BASE}/index.php?topic=${topic_id}.${pageStart}`);
+    if (!$) return;
+
+    const infoDivs = $('div.keyinfo');
+    for (let i = 0; i < infoDivs.length; i++) {
+      const offset = pageStart + i;
+      if (offset < from) continue;
+      if (offset > to) break;
+
+      const postWrapper = infoDivs.eq(i).closest('div.post_wrapper');
+      if (postWrapper.length === 0) continue;
+
+      const embed = buildPostEmbed($, postWrapper, topic_id, topic_title, offset);
+      if (embed) embeds.push(embed);
     }
+  }
 
-    const opScore = posterDiv.find('li.postcount').text().replace('Posts: ', '');
-    const opName = posterDiv.find('a').text().trim();
+  if (embeds.length === 0) return;
 
-    const smalltext = posterDiv.find('div.smalltext').text();
-    const cleanTime = smalltext.replace('« ', '').replace(' »', '');
-    const replyNumIdx = cleanTime.indexOf(' on: ');
-    const datePart = replyNumIdx !== -1 ? cleanTime.slice(replyNumIdx + 5) : cleanTime;
-    const replyNumPart = replyNumIdx !== -1 ? cleanTime.slice(0, replyNumIdx + 5).replace(' on: ', '').replace('Reply ', '') : '';
-    const timestamp = `${datePart} | ${replyNumPart}`;
+  const listeningDocs = await listens();
+  const matchedDoc = listeningDocs.find(l => l.topic_id === topic_id);
+  if (!matchedDoc) return;
 
-    let msgHref = '';
-    try {
-      const msgLink = posterDiv.find('h5 a').first();
-      if (msgLink.length > 0) {
-        const msg = msgLink.attr('href') || '';
-        const hashIdx = msg.indexOf('#');
-        if (hashIdx !== -1) {
-          const msgn = msg.slice(hashIdx + 1);
-          msgHref = `${GEEKHACK_BASE}/index.php?topic=${topic_id}.${msgn}#${msgn}`;
-        }
-      }
-    } catch {
-      // ignore
-    }
-
-    if (!msgHref) {
-      msgHref = `${GEEKHACK_BASE}/index.php?topic=${topic_id}.${post}`;
-    }
-
-    const embed = topicPostEmbed(kind, msgHref, response, topic_title, opName, opScore, opIcon, image, timestamp);
-
-    const listeningDocs = await listens();
-    const matchedDoc = listeningDocs.find(l => l.topic_id === topic_id);
-    if (!matchedDoc) continue;
-
+  for (const embed of embeds) {
     if (matchedDoc.to.channel && matchedDoc.to.channel.length > 0) {
       for (const address of matchedDoc.to.channel.map(String)) {
         try {
@@ -163,8 +197,6 @@ async function processTopic(client: Client, topic_id: number, post: number, topi
         }
       }
     }
-
-    break;
   }
 }
 
@@ -182,37 +214,7 @@ export function startListener(client: Client): void {
         return;
       }
 
-      const recentTopics: Array<{ topic: string; topic_id: number; op_id: number; poster_id: number; post: number }> = [];
-
-      recent$('tr[class*="windowbg"]').each((_, el) => {
-        const links = recent$(el).find('a');
-        if (links.length < 5) return;
-
-        const t = links[2].attribs.href || '';
-        const op = links[4].attribs.href || '';
-        const lp = links[1].attribs.href || '';
-
-        const topic = links[2].children[0]?.toString() || '';
-        const topicMatch = t.match(/topic=(\d+)/);
-        if (!topicMatch) return;
-        const topic_id = parseInt(topicMatch[1], 10);
-
-        const opIdMatch = op.match(/u=(\d+)/);
-        const op_id = opIdMatch ? parseInt(opIdMatch[1], 10) : 0;
-
-        const posterIdMatch = lp.match(/u=(\d+)/);
-        const poster_id = posterIdMatch ? parseInt(posterIdMatch[1], 10) : 0;
-
-        const smalltexts = recent$(el).find('td.smalltext');
-        const postText = smalltexts.first().text().trim();
-        const post = parseInt(postText, 10) || 0;
-
-        if (post === 0) return;
-
-        recentTopics.push({ topic, topic_id, op_id, poster_id, post });
-      });
-
-      recentTopics.reverse();
+      const recentTopics = parseRecentTopics(recent$);
 
       const listeningDocs = await listens();
       const tasks: Promise<void>[] = [];
@@ -220,14 +222,20 @@ export function startListener(client: Client): void {
       for (const rt of recentTopics) {
         const matched = listeningDocs.find(l => l.topic_id === rt.topic_id);
         if (!matched) continue;
+        if (rt.post <= matched.last) continue;
 
-        if (rt.post !== matched.last) {
-          tasks.push(listened(rt.topic_id, rt.post).catch(() => {}));
+        tasks.push(listened(rt.topic_id, rt.post).catch(() => {}));
 
-          if (rt.poster_id !== rt.op_id) continue;
+        // Scan every post since `last`, not just the newest. recenttopics only
+        // reports a topic's most recent poster, so gating on `poster_id ===
+        // op_id` dropped the OP's post whenever someone else replied after it
+        // within one tick. buildPostEmbed does the thread-starter filtering.
+        // On a fresh follow (`last === 0`) only announce the newest post rather
+        // than backfilling the thread's history.
+        const from =
+          matched.last === 0 ? rt.post : Math.max(matched.last + 1, rt.post - MAX_POSTS_PER_TICK + 1);
 
-          tasks.push(processTopic(client, rt.topic_id, rt.post, rt.topic));
-        }
+        tasks.push(processTopic(client, rt.topic_id, from, rt.post, rt.topic));
       }
 
       await Promise.all(tasks);

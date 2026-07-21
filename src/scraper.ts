@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import { GEEKHACK_BASE, USER_AGENT } from './config.js';
-import { ScraperResult, ScraperTopicResult, ScraperBoardResult } from './types/index.js';
+import { ScraperResult, ScraperTopicResult, ScraperBoardResult, RecentTopic } from './types/index.js';
 
 const HEADERS = { 'User-Agent': USER_AGENT };
 const BAD_TITLES = ['An Error Has Occurred!', 'Login', 'geekhack - Index'];
@@ -187,27 +187,8 @@ export async function sort(boardId: number): Promise<number> {
   return front.length > 0 ? front[front.length - 1] : 0;
 }
 
-export async function getRecentTopics(): Promise<
-  Array<{
-    topic: string;
-    topic_id: number;
-    topic_href: string;
-    op_id: number;
-    poster_id: number;
-    post: number;
-  }>
-> {
-  const $ = await fetchPage(`${GEEKHACK_BASE}/index.php?action=recenttopics`);
-  if (!$) return [];
-
-  const results: Array<{
-    topic: string;
-    topic_id: number;
-    topic_href: string;
-    op_id: number;
-    poster_id: number;
-    post: number;
-  }> = [];
+export function parseRecentTopics($: cheerio.CheerioAPI): RecentTopic[] {
+  const results: RecentTopic[] = [];
 
   $('tr[class*="windowbg"]').each((_, el) => {
     const links = $(el).find('a');
@@ -217,7 +198,7 @@ export async function getRecentTopics(): Promise<
     const op = links[4].attribs.href || '';
     const lp = links[1].attribs.href || '';
 
-    const topic = links[2].children[0]?.toString() || '';
+    const topic = $(links[2]).text().trim();
     const topicMatch = t.match(/topic=(\d+)/);
     if (!topicMatch) return;
     const topic_id = parseInt(topicMatch[1], 10);
@@ -228,11 +209,26 @@ export async function getRecentTopics(): Promise<
     const posterIdMatch = lp.match(/u=(\d+)/);
     const poster_id = posterIdMatch ? parseInt(posterIdMatch[1], 10) : 0;
 
-    const smalltexts = $(el).find('td.smalltext');
-    const postText = smalltexts.first().text().trim();
-    const post = parseInt(postText, 10) || 0;
+    // The reply count is the only all-digit cell in the row. Don't index into
+    // td.smalltext — the first one is the last-poster column ("mcmcmc35
+    // minutes ago"), which parseInt reads as NaN and silently drops the row.
+    let post = -1;
+    $(el)
+      .find('td.smalltext')
+      .each((_, cell) => {
+        const text = $(cell).text().trim();
+        if (post === -1 && /^\d+$/.test(text)) post = parseInt(text, 10);
+      });
+    if (post === -1) return;
 
-    results.push({ topic, topic_id, topic_href: `${GEEKHACK_BASE}/index.php?topic=${topic_id}`, op_id, poster_id, post });
+    results.push({
+      topic,
+      topic_id,
+      topic_href: `${GEEKHACK_BASE}/index.php?topic=${topic_id}`,
+      op_id,
+      poster_id,
+      post,
+    });
   });
 
   return results.reverse();

@@ -29,6 +29,16 @@ export interface Destinations {
   dm: Address[];
 }
 
+export interface RecentTopic {
+  topic: string;
+  topic_id: number;
+  topic_href: string;
+  op_id: number;
+  poster_id: number;
+  /** Reply count for the topic, i.e. the post offset of its newest post. */
+  post: number;
+}
+
 export interface ListeningDoc {
   _id?: number;
   topic_id: number;
